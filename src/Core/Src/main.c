@@ -487,14 +487,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-// {
-//   if (hspi == &hspi1)
-//   {
-//     spiRxReady = true;
-//     spiTxReady = true;
-//   }
-// }
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   if (hspi->Instance == SPI1)
