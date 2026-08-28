@@ -135,20 +135,20 @@ int main(void)
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
 
   /* Este modulo solo recibe comandos de escritura del maestro. */
-  HAL_SPI_Receive_IT(&hspi1, (uint8_t *)RxBuffer, 4);
   /* USER CODE END 2 */
-
+  
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (spiRxReady)
+    HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
+    if (RxBuffer[0] == 0x02)
       {
-        spiRxReady = false;
+        //spiRxReady = false;
 
         if (RxBuffer[0] != 0x02)
         {
-          HAL_SPI_Receive_IT(&hspi1, (uint8_t *)RxBuffer, 4);
+          //HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
           continue;
         }
 
@@ -172,7 +172,7 @@ int main(void)
         __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, (estAct.modOa[1]));
 
         /* Queda listo para el siguiente comando, sin bloquear. */
-        HAL_SPI_Receive_IT(&hspi1, (uint8_t *)RxBuffer, 4);
+        HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
       }
     /* USER CODE END WHILE */
 
