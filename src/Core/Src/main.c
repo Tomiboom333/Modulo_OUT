@@ -136,10 +136,11 @@ int main(void)
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
 
   /* Este modulo solo recibe comandos de escritura del maestro. */
+  //detección de modulo
   uint8_t buf = 0x02;
-  HAL_SPI_Receive(&hspi1, RxMod, 1, HAL_MAX_DELAY);
+  HAL_SPI_Receive(&hspi1, &RxMod, 1, HAL_MAX_DELAY);
   if(RxMod == 0x48){
-    HAL_SPI_Transmit(&hspi1, buf, 1, 5);
+    HAL_SPI_Transmit(&hspi1, &buf, 1, 10);
   }
   /* USER CODE END 2 */
   /* Infinite loop */
