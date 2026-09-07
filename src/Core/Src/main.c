@@ -62,6 +62,7 @@ static void MX_TIM1_Init(void);
 uint8_t duty_pwm = 0;
 uint8_t porcentaje_duty = 0;
 volatile uint8_t RxBuffer[4];
+uint8_t RxMod = 0x00;
 volatile bool spiRxReady = false;
 
 uint16_t salidasD[8] ={
@@ -135,8 +136,12 @@ int main(void)
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
 
   /* Este modulo solo recibe comandos de escritura del maestro. */
+  uint8_t buf = 0x02;
+  HAL_SPI_Receive(&hspi1, RxMod, 1, HAL_MAX_DELAY);
+  if(RxMod == 0x48){
+    HAL_SPI_Transmit(&hspi1, buf, 1, 5);
+  }
   /* USER CODE END 2 */
-  
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
