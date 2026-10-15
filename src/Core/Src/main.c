@@ -134,7 +134,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, 0);
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
-
+  
   /* Este modulo solo recibe comandos de escritura del maestro. */
   //detección de modulo
   uint8_t buf = 0x02;
@@ -165,7 +165,7 @@ int main(void)
         estAct.modOa[0] = RxBuffer[2];
         estAct.modOa[1] = RxBuffer[3];
         
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 7; i++)
         {
           HAL_GPIO_WritePin(GPIOB, salidasD[i], estAct.modOd[i]);
         }
