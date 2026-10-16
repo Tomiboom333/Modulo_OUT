@@ -133,7 +133,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, 0);
-  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
+__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
   
   /* Este modulo solo recibe comandos de escritura del maestro. */
   //detección de modulo
@@ -178,7 +178,6 @@ int main(void)
         __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, (estAct.modOa[1]));
 
         /* Queda listo para el siguiente comando, sin bloquear. */
-        HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
       }
     /* USER CODE END WHILE */
 
@@ -492,15 +491,7 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
-/* USER CODE BEGIN 4 */
-void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-  if (hspi->Instance == SPI1)
-  {
-    spiRxReady = true;
-  }
-}
-
+/* USER CODE BEGIN 4 *
 /* USER CODE END 4 */
 
 /**
