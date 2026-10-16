@@ -92,6 +92,49 @@ estAct_t estAct;
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* Protocolo con el CPU */
+#define CMD_DETECCION 0x48   // el CPU pregunta que tipo de modulo es
+#define CMD_ESCRIBIR  0x02   // el CPU manda el estado de las salidas (+3 bytes)
+#define ID_MODULO     0x02   // respuesta a la deteccion: modulo de salidas
+
+/* NSS (chip select) del SPI1: PA4. Se puede leer como GPIO aunque lo use el SPI. */
+#define NSS_PORT GPIOA
+#define NSS_PIN  GPIO_PIN_4
+
+/* Contadores para verificar la comunicacion (se pueden ver con el depurador). */
+volatile uint32_t tramasOk = 0;
+volatile uint32_t tramasError = 0;
+
+static bool nss_activo(void)
+{
+  return HAL_GPIO_ReadPin(NSS_PORT, NSS_PIN) == GPIO_PIN_RESET;
+}
+
+/* Espera a que el CPU termine la trama (NSS en alto) y deja el SPI limpio
+ * para la siguiente: asi un error nunca se arrastra a la trama que sigue. */
+static void spi_fin_de_trama(void)
+{
+  uint32_t t0 = HAL_GetTick();
+  while (nss_activo() && (HAL_GetTick() - t0) < 5) {
+  }
+  __HAL_SPI_DISABLE(&hspi1);
+  (void)hspi1.Instance->DR;   // descarta un byte recibido a medias
+  (void)hspi1.Instance->SR;   // junto con la lectura de DR, limpia el overrun (OVR)
+  __HAL_SPI_ENABLE(&hspi1);
+}
+
+static void aplicar_salidas(void)
+{
+  for (int i = 0; i < 7; i++)
+  {
+    HAL_GPIO_WritePin(GPIOB, salidasD[i], estAct.modOd[i]);
+  }
+  HAL_GPIO_WritePin(GPIOA, SAL_DIG_8, estAct.modOd[7]);
+
+  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, (estAct.modOa[0]));
+  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, (estAct.modOa[1]));
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -135,50 +178,58 @@ int main(void)
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, 0);
 __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
   
-  /* Este modulo solo recibe comandos de escritura del maestro. */
-  //detección de modulo
-  uint8_t buf = 0x02;
-  HAL_SPI_Receive(&hspi1, &RxMod, 1, HAL_MAX_DELAY);
-  if(RxMod == 0x48){
-    HAL_SPI_Transmit(&hspi1, &buf, 1, 10);
-  }
+  /* La deteccion del modulo ya no se hace solo al arrancar: el loop responde
+   * al comando 0x48 en cualquier momento. Asi, si el CPU o este modulo se
+   * reinician por separado, se pueden volver a detectar. */
+
   /* USER CODE END 2 */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
-    if (RxBuffer[0] == 0x02)
+    /* 1. Esperar a que el CPU seleccione este modulo (NSS en bajo) */
+    while (!nss_activo()) {
+    }
+
+    /* 2. Recibir el comando */
+    uint8_t cmd = 0;
+    if (HAL_SPI_Receive(&hspi1, &cmd, 1, 2) != HAL_OK)
+    {
+      cmd = 0;   // no llego el comando: se cuenta como error mas abajo
+    }
+
+    if (cmd == CMD_DETECCION)
+    {
+      uint8_t id = ID_MODULO;
+      HAL_SPI_Transmit(&hspi1, &id, 1, 2);
+      tramasOk++;
+    }
+    else if (cmd == CMD_ESCRIBIR)
+    {
+      /* Los 3 bytes de datos llegan despues de la pausa del CPU */
+      if (HAL_SPI_Receive(&hspi1, (uint8_t *)&RxBuffer[1], 3, 2) == HAL_OK)
       {
-        //spiRxReady = false;
-
-        if (RxBuffer[0] != 0x02)
-        {
-          //HAL_SPI_Receive(&hspi1, (uint8_t *)RxBuffer, 4, 5);
-          continue;
-        }
-
         for (int i = 0; i < 8; i++)
         {
           estAct.modOd[i] = (RxBuffer[1] >> i) & 0x01;
         }
         estAct.modOa[0] = RxBuffer[2];
         estAct.modOa[1] = RxBuffer[3];
-        
-        for (int i = 0; i < 7; i++)
-        {
-          HAL_GPIO_WritePin(GPIOB, salidasD[i], estAct.modOd[i]);
-        }
-        HAL_GPIO_WritePin(GPIOA, SAL_DIG_8, estAct.modOd[7]);
-        
-        //if(RxBuffer[2] == 255){
-        //  HAL_GPIO_WritePin(GPIOB, salidasD[1], 1);
-        //}
-        __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, (estAct.modOa[0]));
-        __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, (estAct.modOa[1]));
-
-        /* Queda listo para el siguiente comando, sin bloquear. */
+        aplicar_salidas();
+        tramasOk++;
       }
+      else
+      {
+        tramasError++;   // trama incompleta: no se tocan las salidas
+      }
+    }
+    else
+    {
+      tramasError++;   // timeout o comando desconocido
+    }
+
+    /* 3. Esperar el fin de la trama y dejar el SPI limpio */
+    spi_fin_de_trama();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
