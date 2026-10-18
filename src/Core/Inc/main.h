@@ -83,12 +83,18 @@ void Error_Handler(void);
 extern uint16_t salidasD[8];
 extern uint16_t entradasD[8];
 
+#include "induproto.h"
+
+/* Canales analogicos (indices de modOa) */
+#define AN_1 0   /* bornera AO0 -> PA10 (TIM1 canal 3) */
+#define AN_2 1   /* bornera AO1 -> PA11 (TIM1 canal 4) */
+
 typedef struct 
 {
     bool modId[8];
     bool modOd[8];
-    uint8_t modIa[2];
-    uint8_t modOa[2];
+    uint16_t modIa[2];
+    uint16_t modOa[2];   /* 12 bits: 0 = apagada, 4095 = 100 % */
 }estAct_t;
 
 extern estAct_t estAct;

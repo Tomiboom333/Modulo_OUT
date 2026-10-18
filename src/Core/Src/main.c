@@ -48,6 +48,7 @@ SPI_HandleTypeDef hspi1;
 TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN PV */
+IWDG_HandleTypeDef hiwdg;
 
 /* USER CODE END PV */
 
@@ -92,10 +93,54 @@ estAct_t estAct;
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* Protocolo con el CPU */
-#define CMD_DETECCION 0x48   // el CPU pregunta que tipo de modulo es
-#define CMD_ESCRIBIR  0x02   // el CPU manda el estado de las salidas (+3 bytes)
-#define ID_MODULO     0x02   // respuesta a la deteccion: modulo de salidas
+/* Protocolo con el CPU: ver induproto.h y docs/PROTOCOLO.md */
+
+/* Si no llega una escritura valida del CPU en este tiempo, todas las salidas
+ * pasan a estado seguro (apagadas). Tiene que ser mayor que el periodo de
+ * ciclo del CPU (20 ms por defecto) mas el tiempo de una redeteccion. */
+#define SALIDAS_TIMEOUT_MS 500
+
+/* Las salidas AO pasan por un optoacoplador que invierte la logica:
+ * pin en alto -> LED del opto encendido -> gate a GND -> salida APAGADA.
+ * Con 1, el PWM se configura con polaridad invertida para que 0 = apagada
+ * y 4095 = 100 %. Poner 0 si se corrige la logica en el hardware. */
+#define AO_LOGICA_INVERTIDA 1
+
+/* Contadores para diagnostico (se pueden ver con el depurador). */
+volatile uint32_t tramasCrcError = 0;
+volatile uint32_t timeoutsComunicacion = 0;
+static uint32_t ultimaEscrituraOk = 0;
+static bool salidasEnSeguro = true;
+
+/* Watchdog: si el firmware se cuelga mas de ~250 ms, el micro se reinicia
+ * (y al reiniciarse arranca con las salidas en estado seguro).
+ * LSI ~40 kHz / 64 = 625 Hz -> 156 cuentas = 250 ms (166..375 ms segun el LSI). */
+static void iwdg_init(void)
+{
+  __HAL_DBGMCU_FREEZE_IWDG();   /* el watchdog se detiene con el depurador en pausa */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
+  hiwdg.Init.Reload = 156;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* Antes de que arranque el PWM, PA10/PA11 quedan como salidas en el nivel
+ * que APAGA las AO, asi no se encienden durante el arranque. */
+static void ao_apagadas_al_arrancar(void)
+{
+  GPIO_InitTypeDef g = {0};
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10 | GPIO_PIN_11,
+                    AO_LOGICA_INVERTIDA ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  g.Pin = GPIO_PIN_10 | GPIO_PIN_11;
+  g.Mode = GPIO_MODE_OUTPUT_PP;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &g);
+}
 
 /* NSS (chip select) del SPI1: PA4. Se puede leer como GPIO aunque lo use el SPI. */
 #define NSS_PORT GPIOA
@@ -131,8 +176,31 @@ static void aplicar_salidas(void)
   }
   HAL_GPIO_WritePin(GPIOA, SAL_DIG_8, estAct.modOd[7]);
 
-  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, (estAct.modOa[0]));
-  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, (estAct.modOa[1]));
+  /* Period = 4094: un compare de 4095 da 100 % de ciclo util */
+  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, estAct.modOa[AN_1]);   /* PA10 = AO0 */
+  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, estAct.modOa[AN_2]);   /* PA11 = AO1 */
+}
+
+/* Todas las salidas apagadas */
+static void salidas_estado_seguro(void)
+{
+  for (int i = 0; i < 8; i++)
+  {
+    estAct.modOd[i] = false;
+  }
+  estAct.modOa[AN_1] = 0;
+  estAct.modOa[AN_2] = 0;
+  aplicar_salidas();
+  salidasEnSeguro = true;
+}
+
+static void revisar_timeout(void)
+{
+  if (!salidasEnSeguro && (HAL_GetTick() - ultimaEscrituraOk) > SALIDAS_TIMEOUT_MS)
+  {
+    salidas_estado_seguro();
+    timeoutsComunicacion++;
+  }
 }
 
 /* USER CODE END 0 */
@@ -165,6 +233,7 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
+  ao_apagadas_al_arrancar();
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
@@ -175,8 +244,8 @@ int main(void)
   HAL_ADC_Start(&hadc2);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
-  __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, 0);
-__HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
+  salidas_estado_seguro();
+  iwdg_init();
   
   /* La deteccion del modulo ya no se hace solo al arrancar: el loop responde
    * al comando 0x48 en cualquier momento. Asi, si el CPU o este modulo se
@@ -187,8 +256,11 @@ __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* 1. Esperar a que el CPU seleccione este modulo (NSS en bajo) */
+    /* 1. Esperar a que el CPU seleccione este modulo (NSS en bajo).
+     *    Mientras tanto se vigila que el CPU siga escribiendo. */
     while (!nss_activo()) {
+      HAL_IWDG_Refresh(&hiwdg);
+      revisar_timeout();
     }
 
     /* 2. Recibir el comando */
@@ -198,29 +270,48 @@ __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
       cmd = 0;   // no llego el comando: se cuenta como error mas abajo
     }
 
-    if (cmd == CMD_DETECCION)
+    if (cmd == PROTO_CMD_DETECCION)
     {
-      uint8_t id = ID_MODULO;
-      HAL_SPI_Transmit(&hspi1, &id, 1, 2);
-      tramasOk++;
-    }
-    else if (cmd == CMD_ESCRIBIR)
-    {
-      /* Los 3 bytes de datos llegan despues de la pausa del CPU */
-      if (HAL_SPI_Receive(&hspi1, (uint8_t *)&RxBuffer[1], 3, 2) == HAL_OK)
-      {
-        for (int i = 0; i < 8; i++)
-        {
-          estAct.modOd[i] = (RxBuffer[1] >> i) & 0x01;
-        }
-        estAct.modOa[0] = RxBuffer[2];
-        estAct.modOa[1] = RxBuffer[3];
-        aplicar_salidas();
+      uint8_t resp[PROTO_LARGO_DETECCION];
+      proto_armar_deteccion(PROTO_ID_SALIDAS, resp);
+      if (HAL_SPI_Transmit(&hspi1, resp, PROTO_LARGO_DETECCION, 2) == HAL_OK) {
         tramasOk++;
+      } else {
+        tramasError++;
+      }
+    }
+    else if (cmd == PROTO_CMD_ESCRIBIR)
+    {
+      /* Los datos llegan despues de la pausa del CPU */
+      uint8_t buf[PROTO_LARGO_SALIDAS];
+      proto_datos_t d;
+      if (HAL_SPI_Receive(&hspi1, buf, PROTO_LARGO_SALIDAS, 2) != HAL_OK)
+      {
+        tramasError++;   // trama incompleta: no se tocan las salidas ni se responde
       }
       else
       {
-        tramasError++;   // trama incompleta: no se tocan las salidas
+        uint8_t ack = PROTO_NAK;
+        if (proto_leer_datos(PROTO_CMD_ESCRIBIR, buf, &d))
+        {
+          for (int i = 0; i < 8; i++)
+          {
+            estAct.modOd[i] = (d.dig >> i) & 0x01;
+          }
+          estAct.modOa[AN_1] = d.ana[0];
+          estAct.modOa[AN_2] = d.ana[1];
+          aplicar_salidas();
+          salidasEnSeguro = false;
+          ultimaEscrituraOk = HAL_GetTick();
+          ack = PROTO_ACK;
+          tramasOk++;
+        }
+        else
+        {
+          tramasCrcError++;   // CRC incorrecto: las salidas no cambian
+        }
+        /* El CPU espera PROTO_PAUSA_US y lee la confirmacion */
+        HAL_SPI_Transmit(&hspi1, &ack, 1, 2);
       }
     }
     else
@@ -230,6 +321,8 @@ __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, 0);
 
     /* 3. Esperar el fin de la trama y dejar el SPI limpio */
     spi_fin_de_trama();
+    HAL_IWDG_Refresh(&hiwdg);
+    revisar_timeout();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -434,9 +527,11 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 71;
+  /* 72 MHz / (4+1) / (4094+1) = 3,5 kHz, resolucion de 12 bits.
+   * Con Period = 4094, un compare de 4095 es el 100 % (salida siempre activa). */
+  htim1.Init.Prescaler = 4;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 255;
+  htim1.Init.Period = 4094;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -452,7 +547,7 @@ static void MX_TIM1_Init(void)
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCPolarity = AO_LOGICA_INVERTIDA ? TIM_OCPOLARITY_LOW : TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
