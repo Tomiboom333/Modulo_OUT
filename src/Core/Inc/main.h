@@ -94,7 +94,7 @@ typedef struct
     bool modId[8];
     bool modOd[8];
     uint16_t modIa[2];
-    uint16_t modOa[2];   /* 12 bits: 0 = apagada, 4095 = 100 % */
+    uint16_t modOa[2];   /* 0 = apagada, 255 = 100 % */
 }estAct_t;
 
 extern estAct_t estAct;

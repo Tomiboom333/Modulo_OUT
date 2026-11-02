@@ -103,7 +103,7 @@ estAct_t estAct;
 /* Las salidas AO pasan por un optoacoplador que invierte la logica:
  * pin en alto -> LED del opto encendido -> gate a GND -> salida APAGADA.
  * Con 1, el PWM se configura con polaridad invertida para que 0 = apagada
- * y 4095 = 100 %. Poner 0 si se corrige la logica en el hardware. */
+ * y 255 = 100 %. Poner 0 si se corrige la logica en el hardware. */
 #define AO_LOGICA_INVERTIDA 1
 
 /* Contadores para diagnostico (se pueden ver con el depurador). */
@@ -176,7 +176,7 @@ static void aplicar_salidas(void)
   }
   HAL_GPIO_WritePin(GPIOA, SAL_DIG_8, estAct.modOd[7]);
 
-  /* Period = 4094: un compare de 4095 da 100 % de ciclo util */
+  /* Period = 254: un compare de 255 da 100 % de ciclo util */
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_3, estAct.modOa[AN_1]);   /* PA10 = AO0 */
   __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_4, estAct.modOa[AN_2]);   /* PA11 = AO1 */
 }
@@ -527,11 +527,11 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  /* 72 MHz / (4+1) / (4094+1) = 3,5 kHz, resolucion de 12 bits.
-   * Con Period = 4094, un compare de 4095 es el 100 % (salida siempre activa). */
-  htim1.Init.Prescaler = 4;
+  /* 72 MHz / (71+1) / (254+1) = 3,92 kHz, resolucion de 8 bits.
+   * Con Period = 254, un compare de 255 es el 100 % (salida siempre activa). */
+  htim1.Init.Prescaler = 71;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 4094;
+  htim1.Init.Period = 254;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
